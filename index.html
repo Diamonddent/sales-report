@@ -99,7 +99,7 @@
     let filtered = [];
 
     async function loadData() {
-      const resp = await fetch('sales-data.csv');   // same folder
+      const resp = await fetch('SALES Data.csv');   // same folder
       const text = await resp.text();
       const [headerLine, ...lines] = text.trim().split('\n');
       const headers = headerLine.split(',');
