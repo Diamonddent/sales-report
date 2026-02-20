@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Sales Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <!-- Tailwind for modern styling (optional but nice) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- Plotly.js for charts -->
+  <script src="https://cdn.plot.ly/plotly-2.30.0.min.js"></script>
+
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen">
+
+  <div class="max-w-7xl mx-auto p-4 space-y-6">
+    <header class="text-center space-y-2">
+      <h1 class="text-3xl font-bold">Sales Dashboard</h1>
+      <p class="text-slate-400 text-sm">Filterable, animated, exportable – powered by HTML & JavaScript</p>
+    </header>
+
+    <!-- Filters -->
+    <section class="grid gap-4 md:grid-cols-3 bg-slate-900/60 rounded-2xl p-4">
+      <div>
+        <label class="block text-xs uppercase tracking-wide text-slate-400 mb-1">
+          Invoice Date (From)
+        </label>
+        <input id="dateFrom" type="date"
+               class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
+      </div>
+      <div>
+        <label class="block text-xs uppercase tracking-wide text-slate-400 mb-1">
+          Invoice Date (To)
+        </label>
+        <input id="dateTo" type="date"
+               class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
+      </div>
+      <div class="space-y-2">
+        <div>
+          <label class="block text-xs uppercase tracking-wide text-slate-400 mb-1">
+            Partner
+          </label>
+          <select id="partnerFilter" multiple
+                  class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm h-24"></select>
+          <p class="text-[10px] text-slate-500 mt-1">Hold Ctrl (Cmd on Mac) to select multiple.</p>
+        </div>
+        <div>
+          <label class="block text-xs uppercase tracking-wide text-slate-400 mb-1">
+            Product Category
+          </label>
+          <select id="categoryFilter" multiple
+                  class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm h-20"></select>
+        </div>
+      </div>
+    </section>
+
+    <!-- KPI cards -->
+    <section id="kpiRow" class="grid gap-4 md:grid-cols-3"></section>
+
+    <!-- Charts -->
+    <section class="grid gap-4 lg:grid-cols-3">
+      <div class="lg:col-span-2 bg-slate-900/60 rounded-2xl p-4">
+        <h2 class="text-sm font-semibold mb-2">Sales Over Time</h2>
+        <div id="chartTime" class="h-72"></div>
+      </div>
+      <div class="bg-slate-900/60 rounded-2xl p-4">
+        <h2 class="text-sm font-semibold mb-2">Top Partners</h2>
+        <div id="chartPartners" class="h-72"></div>
+      </div>
+    </section>
+
+    <section class="bg-slate-900/60 rounded-2xl p-4">
+      <h2 class="text-sm font-semibold mb-2">Sales by Product Category (Animated)</h2>
+      <div id="chartCategory" class="h-80"></div>
+    </section>
+
+    <!-- Table + export -->
+    <section class="bg-slate-900/60 rounded-2xl p-4 space-y-3">
+      <div class="flex items-center justify-between">
+        <h2 class="text-sm font-semibold">Filtered Rows</h2>
+        <button id="btnExport"
+                class="bg-emerald-500 hover:bg-emerald-400 text-black text-xs font-semibold px-4 py-2 rounded-full">
+          Export filtered data (CSV)
+        </button>
+      </div>
+      <div class="overflow-auto max-h-96 border border-slate-800 rounded-xl">
+        <table id="dataTable" class="min-w-full text-xs">
+          <thead class="bg-slate-800 text-slate-300"></thead>
+          <tbody class="divide-y divide-slate-800 bg-slate-900/40"></tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    // -------- Load CSV --------
+    let rawData = [];
+    let filtered = [];
+
+    async function loadData() {
+      const resp = await fetch('sales-data.csv');   // same folder
+      const text = await resp.text();
+      const [headerLine, ...lines] = text.trim().split('\n');
+      const headers = headerLine.split(',');
+
+      rawData = lines.map(line => {
+        const cols = line.split(',');
+        const obj = {};
+        headers.forEach((h, i) => obj[h.trim()] = cols[i] ? cols[i].trim() : '');
+        obj['Invoice Date'] = new Date(obj['Invoice Date']);
+        obj['Due Date'] = new Date(obj['Due Date']);
+        obj['Product Quantity'] = parseFloat(obj['Product Quantity'] || 0);
+        obj['Total in Currency'] = parseFloat(obj['Total in Currency'] || 0);
+        return obj;
+      });
+
+      populateFilters();
+      applyFilters();
+    }
+
+    // -------- Filters + KPI --------
+    function populateFilters() {
+      const partnerSel = document.getElementById('partnerFilter');
+      const catSel = document.getElementById('categoryFilter');
+
+      const partners = [...new Set(rawData.map(r => r['Partner']).filter(x => x))].sort();
+      const cats = [...new Set(rawData.map(r => r['Product Category']).filter(x => x))].sort();
+
+      partners.forEach(p => {
+        const opt = document.createElement('option');
+        opt.value = opt.textContent = p;
+        partnerSel.appendChild(opt);
+      });
+      cats.forEach(c => {
+        const opt = document.createElement('option');
+        opt.value = opt.textContent = c;
+        catSel.appendChild(opt);
+      });
+
+      // default date range
+      const minDate = new Date(Math.min(...rawData.map(r => r['Invoice Date'])));
+      const maxDate = new Date(Math.max(...rawData.map(r => r['Invoice Date'])));
+      document.getElementById('dateFrom').value = minDate.toISOString().slice(0,10);
+      document.getElementById('dateTo').value = maxDate.toISOString().slice(0,10);
+
+      ['dateFrom','dateTo','partnerFilter','categoryFilter'].forEach(id => {
+        document.getElementById(id).addEventListener('change', applyFilters);
+      });
+    }
+
+    function getSelectedMultiple(sel) {
+      return Array.from(sel.selectedOptions).map(o => o.value);
+    }
+
+    function applyFilters() {
+      const df = document.getElementById('dateFrom').value;
+      const dt = document.getElementById('dateTo').value;
+      const partners = getSelectedMultiple(document.getElementById('partnerFilter'));
+      const cats = getSelectedMultiple(document.getElementById('categoryFilter'));
+
+      filtered = rawData.filter(r => {
+        if (df && r['Invoice Date'] < new Date(df)) return false;
+        if (dt && r['Invoice Date'] > new Date(dt)) return false;
+        if (partners.length && !partners.includes(r['Partner'])) return false;
+        if (cats.length && !cats.includes(r['Product Category'])) return false;
+        return true;
+      });
+
+      updateKPIs();
+      updateCharts();
+      updateTable();
+    }
+
+    function updateKPIs() {
+      const kpiRow = document.getElementById('kpiRow');
+      const totalRevenue = filtered.reduce((s,r) => s + (r['Total in Currency'] || 0), 0);
+      const totalQty = filtered.reduce((s,r) => s + (r['Product Quantity'] || 0), 0);
+      const uniqPartners = new Set(filtered.map(r => r['Partner'])).size;
+
+      kpiRow.innerHTML = `
+        <div class="bg-gradient-to-br from-slate-900 to-blue-600 rounded-2xl p-4 shadow-lg">
+          <div class="text-xs text-slate-200/70">Total Revenue</div>
+          <div class="text-2xl font-bold mt-1">${totalRevenue.toLocaleString()}</div>
+        </div>
+        <div class="bg-gradient-to-br from-slate-900 to-emerald-500 rounded-2xl p-4 shadow-lg">
+          <div class="text-xs text-slate-200/70">Total Quantity</div>
+          <div class="text-2xl font-bold mt-1">${totalQty.toLocaleString()}</div>
+        </div>
+        <div class="bg-gradient-to-br from-slate-900 to-pink-500 rounded-2xl p-4 shadow-lg">
+          <div class="text-xs text-slate-200/70">Unique Partners</div>
+          <div class="text-2xl font-bold mt-1">${uniqPartners}</div>
+        </div>`;
+    }
+
+    // -------- Charts (Plotly.js) --------
+    function updateCharts() {
+      if (!filtered.length) {
+        Plotly.newPlot('chartTime', [], {}, {displayModeBar:false});
+        Plotly.newPlot('chartPartners', [], {}, {displayModeBar:false});
+        Plotly.newPlot('chartCategory', [], {}, {displayModeBar:false});
+        return;
+      }
+
+      // sales over time (month)
+      const byMonth = {};
+      filtered.forEach(r => {
+        const ym = r['Invoice Date'].getFullYear() + '-' + String(r['Invoice Date'].getMonth()+1).padStart(2,'0');
+        byMonth[ym] = (byMonth[ym] || 0) + (r['Total in Currency'] || 0);
+      });
+      const months = Object.keys(byMonth).sort();
+      const vals = months.map(m => byMonth[m]);
+      Plotly.newPlot('chartTime', [{
+        x: months, y: vals, type: 'bar'
+      }], {
+        template: 'plotly_dark',
+        margin: {l:40,r:10,t:20,b:40}
+      });
+
+      // top partners
+      const byPartner = {};
+      filtered.forEach(r => {
+        byPartner[r['Partner']] = (byPartner[r['Partner']] || 0) + (r['Total in Currency'] || 0);
+      });
+      const partnerEntries = Object.entries(byPartner)
+        .sort((a,b)=>b[1]-a[1]).slice(0,10);
+      Plotly.newPlot('chartPartners', [{
+        x: partnerEntries.map(e=>e[1]),
+        y: partnerEntries.map(e=>e[0]),
+        type:'bar',
+        orientation:'h'
+      }], {
+        template:'plotly_dark',
+        margin:{l:120,r:10,t:20,b:40}
+      });
+
+      // animated by category over time (month)
+      const framesMap = {};
+      filtered.forEach(r => {
+        const ym = r['Invoice Date'].getFullYear() + '-' + String(r['Invoice Date'].getMonth()+1).padStart(2,'0');
+        if (!framesMap[ym]) framesMap[ym] = {};
+        const cat = r['Product Category'] || 'N/A';
+        framesMap[ym][cat] = (framesMap[ym][cat] || 0) + (r['Total in Currency'] || 0);
+      });
+
+      const frameKeys = Object.keys(framesMap).sort();
+      const frames = frameKeys.map(k => {
+        const cats = Object.keys(framesMap[k]);
+        const vals2 = cats.map(c => framesMap[k][c]);
+        return { name: k, data: [{ x: cats, y: vals2, type:'bar' }] };
+      });
+
+      const firstCats = frames.length ? frames[0].data[0].x : [];
+      const firstVals = frames.length ? frames[0].data[0].y : [];
+
+      Plotly.newPlot('chartCategory', [{
+        x: firstCats,
+        y: firstVals,
+        type: 'bar'
+      }], {
+        template:'plotly_dark',
+        updatemenus: [{
+          type:'buttons',
+          showactive:false,
+          buttons:[{
+            label:'Play',
+            method:'animate',
+            args:[null,{fromcurrent:true,frame:{duration:600, redraw:true},transition:{duration:300}}]
+          }]
+        }],
+        sliders: [{
+          active:0,
+          steps: frameKeys.map(k => ({
+            label:k,
+            method:'animate',
+            args[[k], {mode:'immediate', frame:{duration:0, redraw:true}, transition:{duration:0}}]
+          }))
+        }]
+      }, {
+        displayModeBar:false
+      });
+
+      Plotly.addFrames('chartCategory', frames);
+    }
+
+    // -------- Table + export to CSV --------
+    function updateTable() {
+      const thead = document.querySelector('#dataTable thead');
+      const tbody = document.querySelector('#dataTable tbody');
+      tbody.innerHTML = '';
+
+      if (!filtered.length) {
+        thead.innerHTML = '';
+        return;
+      }
+
+      const headers = Object.keys(filtered[0]);
+      thead.innerHTML = '<tr>' + headers.map(h =>
+        `<th class="px-3 py-2 text-left font-semibold">${h}</th>`).join('') + '</tr>';
+
+      filtered.slice(0,500).forEach(row => {
+        const tr = document.createElement('tr');
+        tr.className = "hover:bg-slate-800/60";
+        tr.innerHTML = headers.map(h =>
+          `<td class="px-3 py-1 whitespace-nowrap">${row[h]}</td>`).join('');
+        tbody.appendChild(tr);
+      });
+    }
+
+    document.getElementById('btnExport').addEventListener('click', () => {
+      if (!filtered.length) return;
+      const headers = Object.keys(filtered[0]);
+      const rows = filtered.map(r => headers.map(h => String(r[h]).replace(/"/g,'""')).join(','));
+      const csv = headers.join(',') + '\n' + rows.join('\n');
+
+      const blob = new Blob([csv], {type: 'text/csv;charset=utf-8;'});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'filtered_sales.csv';
+      a.click();
+      URL.revokeObjectURL(url);
+    });
+
+    loadData();
+  </script>
+</body>
+</html>
